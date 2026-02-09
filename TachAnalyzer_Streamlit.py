@@ -302,7 +302,7 @@ with st.sidebar:
 
                 rpm_data = process_video(tmp_path, fps=fps, progress_callback=update_progress)
                 st.session_state.rpm_data = rpm_data
-                st.session_state.tach_lines = []
+                # Keep existing tach_lines so they persist across video uploads
 
                 st.success(f"✅ Extracted {len(rpm_data)} RPM samples!")
                 st.rerun()
