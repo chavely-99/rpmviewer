@@ -313,65 +313,65 @@ with st.sidebar:
 
     st.divider()
 
-    # Tach Line Controls
-    if st.session_state.rpm_data:
-        st.header("📍 Tach Markers")
+    # Tach Line Controls (available even before video upload)
+    st.header("📍 Tach Markers")
+    st.caption("Add markers before or after uploading video")
 
-        if st.button("➕ Add Tach Line"):
-            colors = ['#ff3b3b','#ff6b2b','#ffaa00','#ffe03b','#4ade80','#00d4ff','#a78bfa','#f472b6']
-            color = colors[len(st.session_state.tach_lines) % len(colors)]
-            st.session_state.tach_lines.append({
-                'label': f'Line {len(st.session_state.tach_lines) + 1}',
-                'rpm': 3800,
-                'color': color,
-                'line_style': 'solid'  # solid, dash, dot, dashdot
-            })
-            st.rerun()
+    if st.button("➕ Add Tach Line"):
+        colors = ['#ff3b3b','#ff6b2b','#ffaa00','#ffe03b','#4ade80','#00d4ff','#a78bfa','#f472b6']
+        color = colors[len(st.session_state.tach_lines) % len(colors)]
+        st.session_state.tach_lines.append({
+            'label': f'Line {len(st.session_state.tach_lines) + 1}',
+            'rpm': 3800,
+            'color': color,
+            'line_style': 'solid'  # solid, dash, dot, dashdot
+        })
+        st.rerun()
 
-        # Edit existing lines
-        to_remove = []
-        for i, line in enumerate(st.session_state.tach_lines):
-            # Ensure line_style exists for backwards compatibility
-            if 'line_style' not in line:
-                line['line_style'] = 'solid'
+    # Edit existing lines
+    to_remove = []
+    for i, line in enumerate(st.session_state.tach_lines):
+        # Ensure line_style exists for backwards compatibility
+        if 'line_style' not in line:
+            line['line_style'] = 'solid'
 
-            with st.expander(f"📍 {line['label']}", expanded=False):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    new_label = st.text_input("Label", line['label'], key=f"label_{i}")
-                    line['label'] = new_label
-                with col2:
-                    if st.button("🗑️", key=f"del_{i}"):
-                        to_remove.append(i)
+        with st.expander(f"📍 {line['label']}", expanded=False):
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                new_label = st.text_input("Label", line['label'], key=f"label_{i}")
+                line['label'] = new_label
+            with col2:
+                if st.button("🗑️", key=f"del_{i}"):
+                    to_remove.append(i)
 
-                new_rpm = st.number_input("RPM", 0, 10000, line['rpm'], step=50, key=f"rpm_{i}")
-                line['rpm'] = new_rpm
+            new_rpm = st.number_input("RPM", 0, 10000, line['rpm'], step=50, key=f"rpm_{i}")
+            line['rpm'] = new_rpm
 
-                col_color, col_style = st.columns(2)
-                with col_color:
-                    new_color = st.color_picker("Color", line['color'], key=f"color_{i}")
-                    line['color'] = new_color
+            col_color, col_style = st.columns(2)
+            with col_color:
+                new_color = st.color_picker("Color", line['color'], key=f"color_{i}")
+                line['color'] = new_color
 
-                with col_style:
-                    style_options = {
-                        'Solid': 'solid',
-                        'Dashed': 'dash',
-                        'Dotted': 'dot',
-                        'Dash-Dot': 'dashdot'
-                    }
-                    current_style_label = [k for k, v in style_options.items() if v == line['line_style']][0]
-                    new_style_label = st.selectbox(
-                        "Line Style",
-                        options=list(style_options.keys()),
-                        index=list(style_options.keys()).index(current_style_label),
-                        key=f"style_{i}"
-                    )
-                    line['line_style'] = style_options[new_style_label]
+            with col_style:
+                style_options = {
+                    'Solid': 'solid',
+                    'Dashed': 'dash',
+                    'Dotted': 'dot',
+                    'Dash-Dot': 'dashdot'
+                }
+                current_style_label = [k for k, v in style_options.items() if v == line['line_style']][0]
+                new_style_label = st.selectbox(
+                    "Line Style",
+                    options=list(style_options.keys()),
+                    index=list(style_options.keys()).index(current_style_label),
+                    key=f"style_{i}"
+                )
+                line['line_style'] = style_options[new_style_label]
 
-        # Remove marked lines
-        for i in reversed(to_remove):
-            st.session_state.tach_lines.pop(i)
-            st.rerun()
+    # Remove marked lines
+    for i in reversed(to_remove):
+        st.session_state.tach_lines.pop(i)
+        st.rerun()
 
 # Main Content
 if st.session_state.rpm_data is None:
@@ -431,12 +431,19 @@ else:
                 hovertemplate=f"<b>{line['label']}</b><br>{line['rpm']:,} RPM<extra></extra>"
             ))
 
+        # Calculate auto-zoom range (filter outliers using percentiles)
+        rpm_p1 = df['RPM'].quantile(0.01)   # 1st percentile
+        rpm_p99 = df['RPM'].quantile(0.99)  # 99th percentile
+        y_min = max(0, rpm_p1 - 1000)       # Add 1000 RPM padding below
+        y_max = rpm_p99 + 1000              # Add 1000 RPM padding above
+
         # Layout
         fig.update_layout(
             template='plotly_white',
             height=600,
             xaxis_title="Time (seconds)",
             yaxis_title="RPM",
+            yaxis=dict(range=[y_min, y_max]),  # Auto-zoom with padding
             hovermode='x unified',
             legend=dict(
                 orientation="h",
