@@ -40,9 +40,10 @@ if sys.platform == 'win32':
 def extract_frames(video_path, fps=10):
     """Extract frames from video at given FPS using ffmpeg."""
     tmpdir = tempfile.mkdtemp(prefix="tach_")
+    # Scale down to 720p max for faster processing, extract at specified FPS
     cmd = [
         "ffmpeg", "-i", str(video_path),
-        "-vf", f"fps={fps}",
+        "-vf", f"scale=-2:720,fps={fps}",
         str(Path(tmpdir) / "frame_%05d.png"),
         "-y", "-loglevel", "error"
     ]
@@ -104,7 +105,7 @@ def ocr_frame(frame_path):
         if match:
             val = int(match.group())
             if 10 <= val <= 9999:
-                return val
+                return val  # Early return on success - don't try other strategies
 
     return None
 
@@ -181,8 +182,8 @@ def process_video(video_path, fps=10, progress_callback=None):
     # Prepare arguments for parallel processing
     frame_args = [(frame, i, fps) for i, frame in enumerate(frames)]
 
-    # Use 12 workers for maximum parallelism (Tesseract releases GIL)
-    num_workers = 12
+    # Use 16 workers for maximum parallelism (Tesseract releases GIL)
+    num_workers = 16
 
     raw_data = []
     valid = 0
@@ -283,7 +284,7 @@ with st.sidebar:
         help="Screen recording of digital RPM display"
     )
 
-    fps = st.slider("Extraction FPS", 5, 30, 10, help="Higher = more accurate but slower")
+    fps = st.slider("Extraction FPS", 5, 30, 8, help="Higher = more accurate but slower")
 
     if uploaded_file:
         if st.button("🚀 Process Video", type="primary"):
