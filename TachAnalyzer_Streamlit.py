@@ -34,22 +34,87 @@ if sys.platform == 'win32':
 
 
 # ============================================================================
-# VIDEO PROCESSING FUNCTIONS (same as original)
+# VIDEO PROCESSING FUNCTIONS
 # ============================================================================
 
-def extract_frames(video_path, fps=10):
-    """Extract frames from video at given FPS using ffmpeg."""
+def detect_tach_roi(video_path):
+    """Detect tach display region from first few frames for efficient cropping.
+    Returns (x, y, w, h) bounding box or None if not detected."""
+    tmpdir = tempfile.mkdtemp(prefix="tach_roi_")
+    try:
+        cmd = [
+            "ffmpeg", "-i", str(video_path),
+            "-frames:v", "5",
+            str(Path(tmpdir) / "roi_%03d.png"),
+            "-y", "-loglevel", "error"
+        ]
+        subprocess.run(cmd, check=True)
+        frames = sorted(Path(tmpdir).glob("roi_*.png"))
+
+        strategies = [
+            lambda a: (a[:,:,0] < 80) & (a[:,:,2] > 60) & \
+                      (a[:,:,2].astype(int) - a[:,:,0].astype(int) > 30),
+            lambda a: (a[:,:,0] < 100) & (a[:,:,1] > 150) & (a[:,:,2] > 150),
+            lambda a: (a[:,:,0] < 150) & (a[:,:,1] > 100) & (a[:,:,2] > 100) & \
+                      ((a[:,:,1].astype(int) + a[:,:,2].astype(int) - a[:,:,0].astype(int)) > 200),
+        ]
+
+        for frame_path in frames:
+            arr = np.array(Image.open(frame_path))
+            for strategy in strategies:
+                mask = strategy(arr)
+                if mask.sum() < 10:
+                    continue
+                ys, xs = np.where(mask)
+                # Generous padding around detected text region
+                pad = 60
+                x1 = max(0, int(xs.min()) - pad)
+                y1 = max(0, int(ys.min()) - pad)
+                x2 = min(arr.shape[1], int(xs.max()) + pad)
+                y2 = min(arr.shape[0], int(ys.max()) + pad)
+                w, h = x2 - x1, y2 - y1
+                if w > 20 and h > 10:
+                    return (x1, y1, w, h)
+        return None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def extract_frames(video_path, fps=10, crop_roi=None):
+    """Extract frames from video, optionally cropped to tach ROI."""
     tmpdir = tempfile.mkdtemp(prefix="tach_")
-    # Scale down to 720p max for faster processing, extract at specified FPS
+    vf_filters = []
+    if crop_roi:
+        x, y, w, h = crop_roi
+        vf_filters.append(f"crop={w}:{h}:{x}:{y}")
+    else:
+        vf_filters.append("scale=-2:720")  # Fallback: scale to 720p
+    vf_filters.append(f"fps={fps}")
     cmd = [
         "ffmpeg", "-i", str(video_path),
-        "-vf", f"scale=-2:720,fps={fps}",
+        "-vf", ",".join(vf_filters),
         str(Path(tmpdir) / "frame_%05d.png"),
         "-y", "-loglevel", "error"
     ]
     subprocess.run(cmd, check=True)
     frames = sorted(Path(tmpdir).glob("frame_*.png"))
     return tmpdir, frames
+
+
+def find_unique_frames(frames, threshold=3.0):
+    """Find frames that visually changed from predecessor. Skip static duplicates.
+    Returns list of (original_index, frame_path) for unique frames."""
+    if not frames:
+        return []
+    unique = [(0, frames[0])]
+    prev_arr = np.array(Image.open(frames[0]), dtype=np.float32)
+    for i in range(1, len(frames)):
+        curr_arr = np.array(Image.open(frames[i]), dtype=np.float32)
+        diff = np.mean(np.abs(curr_arr - prev_arr))
+        if diff > threshold:
+            unique.append((i, frames[i]))
+            prev_arr = curr_arr
+    return unique
 
 
 def ocr_frame(frame_path):
@@ -168,55 +233,63 @@ def ocr_frame_with_time(args):
 
 
 def process_video(video_path, fps=10, progress_callback=None):
-    """Full pipeline: video → cleaned RPM data (with parallel processing)."""
+    """Full pipeline: video → cleaned RPM data.
+    Uses auto-ROI detection, frame dedup, and parallel OCR for speed."""
 
-    # Extract frames
+    # Phase 1: Detect tach display region
     if progress_callback:
-        progress_callback("Extracting frames...", 0.1)
-    tmpdir, frames = extract_frames(video_path, fps)
+        progress_callback("Detecting tach display region...", 0.05)
+    roi = detect_tach_roi(video_path)
 
-    # OCR each frame in parallel
+    # Phase 2: Extract frames (cropped to ROI if detected)
     if progress_callback:
-        progress_callback(f"Processing {len(frames)} frames with OCR (parallel)...", 0.2)
+        roi_msg = f"ROI found ({roi[2]}x{roi[3]}px) — cropping" if roi else "Full frame mode"
+        progress_callback(f"Extracting frames... {roi_msg}", 0.10)
+    tmpdir, frames = extract_frames(video_path, fps, crop_roi=roi)
+    total_frames = len(frames)
 
-    # Prepare arguments for parallel processing
-    frame_args = [(frame, i, fps) for i, frame in enumerate(frames)]
+    # Phase 3: Skip duplicate frames (tach doesn't change every frame)
+    if progress_callback:
+        progress_callback(f"Deduplicating {total_frames} frames...", 0.15)
+    unique = find_unique_frames(frames)
+    skipped = total_frames - len(unique)
 
-    # Use 16 workers for maximum parallelism (Tesseract releases GIL)
+    if progress_callback:
+        progress_callback(f"{len(unique)} unique frames (skipped {skipped} duplicates)", 0.20)
+
+    # Phase 4: OCR only unique frames in parallel
+    frame_args = [(path, idx, fps) for idx, path in unique]
     num_workers = 16
 
     raw_data = []
     valid = 0
 
-    # Process frames in parallel with progress updates
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        # Process in chunks for better progress reporting
-        chunk_size = max(10, len(frames) // 20)  # ~20 progress updates
-
+        chunk_size = max(5, len(frame_args) // 20)
         for i in range(0, len(frame_args), chunk_size):
             chunk = frame_args[i:i+chunk_size]
             results = list(executor.map(ocr_frame_with_time, chunk))
 
-            # Collect valid results
             for time_sec, rpm in results:
                 if rpm is not None:
                     raw_data.append([time_sec, rpm])
                     valid += 1
 
             if progress_callback:
-                progress = 0.2 + ((i + len(chunk)) / len(frames)) * 0.6
-                progress_callback(f"Processed {i+len(chunk)}/{len(frames)} frames ({valid} valid)", progress)
+                progress = 0.20 + ((i + len(chunk)) / len(frame_args)) * 0.65
+                progress_callback(
+                    f"OCR: {i+len(chunk)}/{len(unique)} unique frames ({valid} valid)",
+                    progress
+                )
 
     # Cleanup temp files
     shutil.rmtree(tmpdir, ignore_errors=True)
 
-    # Clean data
+    # Phase 5: Clean data
     if progress_callback:
-        progress_callback("Cleaning data...", 0.9)
+        progress_callback("Cleaning data...", 0.90)
 
-    # Sort by time (parallel processing may return out of order within chunks)
     raw_data.sort(key=lambda x: x[0])
-
     data = trim_leading_flat(raw_data)
     data = fix_truncated(data)
     data = remove_outliers(data)
