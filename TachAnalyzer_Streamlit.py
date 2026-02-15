@@ -479,19 +479,49 @@ else:
 
     # TAB 1: RPM Trace
     with tab1:
+        # Smoothing control
+        smooth_window = st.slider(
+            "Smoothing Window", 1, 25, 1, step=2,
+            help="Rolling average window size. 1 = raw data, higher = smoother."
+        )
+
         fig = go.Figure()
 
-        # Main RPM trace
-        fig.add_trace(go.Scatter(
-            x=df['Time'],
-            y=df['RPM'],
-            mode='lines',
-            name='RPM',
-            line=dict(color='#3b82f6', width=2.5),
-            fill='tozeroy',
-            fillcolor='rgba(59, 130, 246, 0.1)',
-            hovertemplate='<b>%{x:.1f}s</b><br>%{y:,} RPM<extra></extra>'
-        ))
+        if smooth_window > 1:
+            # Show raw trace faded in background
+            fig.add_trace(go.Scatter(
+                x=df['Time'],
+                y=df['RPM'],
+                mode='lines',
+                name='Raw RPM',
+                line=dict(color='#3b82f6', width=1),
+                opacity=0.25,
+                hoverinfo='skip'
+            ))
+            # Smoothed trace on top
+            smoothed = df['RPM'].rolling(window=smooth_window, center=True, min_periods=1).mean()
+            fig.add_trace(go.Scatter(
+                x=df['Time'],
+                y=smoothed,
+                mode='lines',
+                name=f'RPM (smoothed ×{smooth_window})',
+                line=dict(color='#3b82f6', width=2.5),
+                fill='tozeroy',
+                fillcolor='rgba(59, 130, 246, 0.1)',
+                hovertemplate='<b>%{x:.1f}s</b><br>%{y:,.0f} RPM<extra></extra>'
+            ))
+        else:
+            # Raw trace only
+            fig.add_trace(go.Scatter(
+                x=df['Time'],
+                y=df['RPM'],
+                mode='lines',
+                name='RPM',
+                line=dict(color='#3b82f6', width=2.5),
+                fill='tozeroy',
+                fillcolor='rgba(59, 130, 246, 0.1)',
+                hovertemplate='<b>%{x:.1f}s</b><br>%{y:,} RPM<extra></extra>'
+            ))
 
         # Add tach lines
         for line in st.session_state.tach_lines:
