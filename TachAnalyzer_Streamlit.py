@@ -101,9 +101,10 @@ def extract_frames(video_path, fps=10, crop_roi=None):
     return tmpdir, frames
 
 
-def find_unique_frames(frames, threshold=3.0):
+def find_unique_frames(frames, threshold=0.5):
     """Find frames that visually changed from predecessor. Skip static duplicates.
-    Returns list of (original_index, frame_path) for unique frames."""
+    Returns list of (original_index, frame_path) for unique frames.
+    Low threshold (0.5) ensures single-digit RPM changes aren't missed."""
     if not frames:
         return []
     unique = [(0, frames[0])]
